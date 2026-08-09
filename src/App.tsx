@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { Send, Paperclip, Mic, Globe, Code, Shield, Sparkles, RefreshCw, PhoneCall, FileText, Search, HelpCircle } from 'lucide-react';
 import { ChatMessage, Language, ClaimData, DocumentFile, ChatOption, StatusCardData } from './types';
 import { TRANSLATIONS, detectLanguage } from './data/translations';
@@ -18,7 +18,6 @@ export default function App() {
 
   // Active Claim Data State
   const [claimData, setClaimData] = useState<ClaimData>({
-    claimType: 'motor',
     documentsAttached: [],
   });
 
@@ -125,8 +124,11 @@ export default function App() {
 
       setIsTyping(false);
 
-      if (data.updatedClaimData) {
-        setClaimData((prev) => ({ ...prev, ...data.updatedClaimData }));
+      const extracted = data.extractedClaimData;
+      let mergedClaimData = claimData;
+      if (extracted) {
+        mergedClaimData = { ...claimData, ...extracted };
+        setClaimData(mergedClaimData);
       }
       if (data.nextFlowState) {
         setFlowState(data.nextFlowState);
@@ -141,10 +143,23 @@ export default function App() {
         msgType = 'file_picker';
       } else if (data.triggerAction === 'SHOW_CLAIM_SUMMARY') {
         msgType = 'claim_summary';
-        summaryData = { ...claimData, ...(data.updatedClaimData || {}) };
+        summaryData = mergedClaimData;
       } else if (data.triggerAction === 'SHOW_STATUS_CARD') {
         msgType = 'status_card';
-        statusCard = data.statusCardData || SAMPLE_CLAIMS['CLM-2026-88102'].statusInfo;
+        if (data.statusCardData) {
+          statusCard = data.statusCardData;
+        } else {
+          const match = query.match(/CLM-\d{4}-\d+/i);
+          if (match) {
+            try {
+              const statusRes = await fetch(`/api/claims/status/${match[0].toUpperCase()}`);
+              const statusJson = await statusRes.json();
+              if (statusJson.found) statusCard = statusJson.statusInfo;
+            } catch (e) {
+              console.warn('Status lookup failed:', e);
+            }
+          }
+        }
       } else if (data.triggerAction === 'SHOW_HANDOFF_FORM') {
         msgType = 'handoff_card';
       } else if (data.suggestedOptions && data.suggestedOptions.length > 0) {
@@ -187,7 +202,7 @@ export default function App() {
     if (q.includes('claim') || q.includes('gukora') || q.includes('file')) {
       replyText =
         lang === 'rw'
-          ? 'Gukora Claim Nshya:\nNyamuneka hitamo ubwoko bw’ubwishingizi bwawe:'
+          ? 'Gukora Claim Nshya:\nNyamuneka hitamo ubwoko bw\u2019ubwishingizi bwawe:'
           : 'Filing a New Claim:\nPlease select your claim category below:';
       msgType = 'options';
       options = [
@@ -208,13 +223,13 @@ export default function App() {
     } else if (q.includes('agent') || q.includes('umukozi') || q.includes('human')) {
       replyText =
         lang === 'rw'
-          ? 'Kuvugana n’umukozi w’ubwishingizi:\nNyamuneka uzuza izina na numero ya telefoni:'
+          ? 'Kuvugana n\u2019umukozi w\u2019ubwishingizi:\nNyamuneka uzuza izina na numero ya telefoni:'
           : 'Talk to an Authorized Insurance Representative:\nPlease enter your details below:';
       msgType = 'handoff_card';
     } else {
       replyText =
         lang === 'rw'
-          ? 'Muraho! Ngufeze nte uyu munsi? Nshobora kugufasha gukora claim nshya, gusuzuma aho claim igeze, cyangwa kuvugana n’umukozi.'
+          ? 'Muraho! Ngufeze nte uyu munsi? Nshobora kugufasha gukora claim nshya, gusuzuma aho claim igeze, cyangwa kuvugana n\u2019umukozi.'
           : 'Hello! How can I assist you today? I can help you file a claim, check status, answer coverage FAQs, or request an agent callback.';
       msgType = 'options';
       options = [
@@ -247,7 +262,11 @@ export default function App() {
       handleSendMessage('Ndifuza gukora claim nshya / I want to file a new claim');
     } else if (optionValue === 'check_status') {
       setFlowState('CHECKING_STATUS');
-      handleSendMessage('Ndifuza kureba aho claim yanjye igeze (CLM-2026-88102)');
+      handleSendMessage(
+        language === 'rw'
+          ? 'Ndashaka kureba aho claim yanjye igeze.'
+          : 'I want to check my claim status.'
+      );
     } else if (optionValue === 'ask_coverage') {
       handleSendMessage('Ese ubwishingizi bw\'ibinyabiziga (motor insurance) bukubiyemo ibiki?');
     } else if (optionValue === 'human_agent') {
@@ -257,24 +276,13 @@ export default function App() {
       setClaimData((prev) => ({
         ...prev,
         claimType: type,
-        policyNumber: 'RW-MOT-88392',
-        incidentDate: '2026-08-07',
-        location: 'Kigali, Remera',
-        description: type === 'motor' ? 'Bumper accident near roundabout' : 'Emergency medical outpatient care',
       }));
-
-      // Prompt for files / documents
-      const botMsg: ChatMessage = {
-        id: `bot-file-req-${Date.now()}`,
-        sender: 'bot',
-        text:
-          language === 'rw'
-            ? `Ubwishingizi bwa ${type} bwatoranyijwe. Ese hamwe muri iyi claim harimo amafoto cyangwa raporo y’ibyakorewe uzoheza kuza?`
-            : `Selected ${type} insurance claim. Do you have incident photos or a police/medical report to attach?`,
-        timestamp: timeStr,
-        type: 'file_picker',
-      };
-      setMessages((prev) => [...prev, botMsg]);
+      setFlowState('COLLECTING_CLAIM_INFO');
+      handleSendMessage(
+        language === 'rw'
+          ? `Nahisemo ubwishingizi bwa ${type}. Ndifuza gutangira gutanga amakuru y'iki kirego.`
+          : `I selected ${type} insurance. I'd like to start providing the claim details.`
+      );
     } else {
       handleSendMessage(label);
     }
@@ -297,16 +305,10 @@ export default function App() {
       attachedFiles: files,
     };
 
-    // Bot generates claim summary card
+    // Bot generates claim summary card from whatever real data has been collected so far
     const updatedClaim: ClaimData = {
       ...claimData,
       documentsAttached: files,
-      policyNumber: claimData.policyNumber || 'RW-MOT-88392',
-      claimType: claimData.claimType || 'motor',
-      incidentDate: claimData.incidentDate || '2026-08-07',
-      location: claimData.location || 'Kigali, Remera',
-      description: claimData.description || 'Bumper damage after minor road accident. Police report attached.',
-      policeReportNumber: 'PR-KGL-2026-992',
     };
 
     setClaimData(updatedClaim);
@@ -329,14 +331,7 @@ export default function App() {
   // User skipped file attachment
   const handleSkipFiles = () => {
     const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const updatedClaim: ClaimData = {
-      ...claimData,
-      policyNumber: claimData.policyNumber || 'RW-MOT-88392',
-      claimType: claimData.claimType || 'motor',
-      incidentDate: claimData.incidentDate || '2026-08-07',
-      location: claimData.location || 'Kigali, Remera',
-      description: claimData.description || 'Incident filed without photo attachments.',
-    };
+    const updatedClaim: ClaimData = { ...claimData };
     setClaimData(updatedClaim);
 
     const botSummaryMsg: ChatMessage = {
@@ -374,13 +369,13 @@ export default function App() {
       sender: 'bot',
       text:
         language === 'rw'
-          ? `🎉 Claim Yanyu Yahererejwe Neza!\n\n📌 Numero Y'ikirango (Reference Number): ${randomRef}\n⏱️ Igihe cyo gusuzuma: Iminsi 5–7 y’akazi.\n\nTwakiriye dosiye yanyu kandi abagenzuzi bacu batangiye kuyisuzuma.`
+          ? `🎉 Claim Yanyu Yahererejwe Neza!\n\n📌 Numero Y'ikirango (Reference Number): ${randomRef}\n⏱️ Igihe cyo gusuzuma: Iminsi 5–7 y'akazi.\n\nTwakiriye dosiye yanyu kandi abagenzuzi bacu batangiye kuyisuzuma.`
           : `🎉 Claim Submitted Successfully!\n\n📌 Reference Number: ${randomRef}\n⏱️ Estimated Review: 5–7 business days.\n\nYour intake has been logged into our system and passed to underwriters.`,
       timestamp: timeStr,
       type: 'options',
       options: [
         { label: language === 'rw' ? '🔍 Reba Aho Igeze Now' : '🔍 Check Status Now', value: 'check_status', icon: 'search' },
-        { label: language === 'rw' ? '📞 Vugana n’Umukozi' : '📞 Request Agent Call', value: 'human_agent', icon: 'phone-call' },
+        { label: language === 'rw' ? '📞 Vugana n\u2019Umukozi' : '📞 Request Agent Call', value: 'human_agent', icon: 'phone-call' },
       ],
     };
 
@@ -406,7 +401,7 @@ export default function App() {
       sender: 'bot',
       text:
         language === 'rw'
-          ? `Murakoze ${name}! Ubusabe bwanyu bwakiriwe. Umukozi w’ubwishingizi arakuhamagara kuri ${phone} mu masaha 24.`
+          ? `Murakoze ${name}! Ubusabe bwanyu bwakiriwe. Umukozi w\u2019ubwishingizi arakuhamagara kuri ${phone} mu masaha 24.`
           : `Thank you ${name}! Your callback request is confirmed. An authorized representative will call ${phone} within 24 hours.`,
       timestamp: timeStr,
     };
@@ -447,7 +442,7 @@ export default function App() {
         sender: 'bot',
         text:
           language === 'rw'
-            ? 'Amakuru ya claim y’ibinyabiziga (Motor Claim) yazuwe. Nyamuneka suzuma kandi ukande "Emeza & Oherereza":'
+            ? 'Amakuru ya claim y\u2019ibinyabiziga (Motor Claim) yazuwe. Nyamuneka suzuma kandi ukande "Emeza & Oherereza":'
             : 'Automated Motor Claim intake prepared. Please review details below and click "Confirm & Submit":',
         timestamp: timeStr,
         type: 'claim_summary',
@@ -483,7 +478,7 @@ export default function App() {
         sender: 'bot',
         text:
           language === 'rw'
-            ? 'Uzuza numero ya telefoni n’izina ryawe uheze guhamagarwa n’umukozi:'
+            ? 'Uzuza numero ya telefoni n\u2019izina ryawe uheze guhamagarwa n\u2019umukozi:'
             : 'Request a human agent callback:',
         timestamp: timeStr,
         type: 'handoff_card',
@@ -493,7 +488,7 @@ export default function App() {
   };
 
   const handleResetChat = () => {
-    setClaimData({ claimType: 'motor', documentsAttached: [] });
+    setClaimData({ documentsAttached: [] });
     setFlowState('GREETING');
     setMessages([getInitialGreetingMessage(language)]);
   };
